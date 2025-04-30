@@ -17,7 +17,7 @@ from yfinance.exceptions import YFRateLimitError
 st.set_page_config(page_title="Valuation & Backtest & Snapshot", layout="wide")
 
 # ─── Data Loading ────────────────────────────────────────────────────────────
-file_path = "Master data price eps etc.xlsx"
+file_path = 'Master data price eps etc.xlsx'
 
 
 @st.cache_data
