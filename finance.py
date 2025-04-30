@@ -1,56 +1,69 @@
-"“”
+"""
 streamlit_app.py  –  Equity Insight Workbench
 Cleaned up with consistent 4-space indentation.
-“”
+"""
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 import plotly.graph_objects as go
 import urllib.parse
-from yfinance.exceptions import YFRateLimitError
+import time
+@st.cache_data(show_spinner=False)
+def get_ticker_info(tkr: str) -> dict:
+    """Fetch and cache Yahoo Finance info with retry on rate-limit."""
+    ticker = yf.Ticker(tkr)
+    for attempt in range(3):
+        try:
+            return ticker.info or {}
+        except YFRateLimitError:
+            # wait a bit and retry
+            time.sleep(1 + attempt)
+    # if we’ve retried 3 times, give up
+    return {}
 # ─── Page config 
 ─────────────────────────────────────────────────────────────
-st.set_page_config(page_title=“Valuation & Backtest & Snapshot”, 
-layout=“wide”)
+st.set_page_config(page_title="Valuation & Backtest & Snapshot", 
+layout="wide")
 # ─── Data Loading 
 ────────────────────────────────────────────────────────────
-file_path = “data/Master data price eps etc.xlsx”
+file_path = "data/Master data price eps etc.xlsx"
 @st.cache_data
 def load_data():
     # Company Dta sheet
-    df = pd.read_excel(file_path, sheet_name=“Company Dta”, 
+    df = pd.read_excel(file_path, sheet_name="Company Dta", 
 header=None)
     headers = df.iloc[3]
     df.columns = headers
     company_data = df.iloc[4:].reset_index(drop=True)
     # EPS & Price blocks
     eps_data = company_data.iloc[:, 9:24].apply(pd.to_numeric, 
-errors=“coerce”)
+errors="coerce")
     price_data = company_data.iloc[:, 24:39].apply(pd.to_numeric, 
-errors=“coerce”)
+errors="coerce")
     eps_data.columns = list(range(2010, 2025))
     price_data.columns = list(range(2010, 2025))
     # Tickers & sub-industry codes
-    ticker_data = company_data[“Ticker”].reset_index(drop=True)
-    gsubind_data = company_data[“gsubind”].reset_index(drop=True)
+    ticker_data = company_data["Ticker"].reset_index(drop=True)
+    gsubind_data = company_data["gsubind"].reset_index(drop=True)
     # Median PE sheet
-    median_pe = pd.read_excel(file_path, sheet_name=“Median PE”, 
+    median_pe = pd.read_excel(file_path, sheet_name="Median PE", 
 header=None)
     median_pe_trim = median_pe.iloc[5:, :18].reset_index(drop=True)
-    median_pe_trim.columns = [None, None, “gsubind”] + list(range(2010,
+    median_pe_trim.columns = [None, None, "gsubind"] + list(range(2010,
 2025))
     gsubind_to_median_pe = {
-        row[“gsubind”]: row[3:].values for _, row in 
+        row["gsubind"]: row[3:].values for _, row in 
 median_pe_trim.iterrows()
     }
     # Analysis sheet → actual prices
-    analysis = pd.read_excel(file_path, sheet_name=“Analysis”, 
+    analysis = pd.read_excel(file_path, sheet_name="Analysis", 
 header=None)
     analysis_trim = analysis.iloc[5:, :40].reset_index(drop=True)
     actual_price = analysis_trim.iloc[:, 24:39].apply(pd.to_numeric, 
-errors=“coerce”)
+errors="coerce")
     actual_price.columns = list(range(2010, 2025))
     actual_price.index = analysis_trim.iloc[:, 0]
     return (
@@ -74,33 +87,31 @@ errors=“coerce”)
 years = list(range(2010, 2025))
 # ─── Sidebar Ticker Input 
 ────────────────────────────────────────────────────
-ticker_input = st.sidebar.selectbox(“Choose a ticker”, 
+ticker_input = st.sidebar.selectbox("Choose a ticker", 
 options=ticker_data.tolist())
 # ─── How-to banner 
 ───────────────────────────────────────────────────────────
 with st.container():
     st.markdown(
-        “”"
-### :rocket: Welcome to the **Equity Insight Workbench**
+        """
+### 🚀 Welcome to the **Equity Insight Workbench**
 | What do you want to know? | Click this tab |
 |---------------------------|----------------|
-| **Is the stock cheap or rich *right now*?** | **:money_with_wings: 
-Valuation Advisor** |
-| **Has this model worked in the past?** | **:bar_chart: Backtest** |
-| **What’s happening with the company & price today?** | **:office: 
-Company Snapshot** |
+| **Is the stock cheap or rich *right now*?** | **🚀 Valuation Advisor** |
+| **Has this model worked in the past?** | **🚀 Backtest** |
+| **What’s happening with the company & price today?** | **🚀 Company 
+Snapshot** |
 1. **Pick a ticker** in the sidebar.
 2. Jump between tabs to answer the questions above.
 3. Use the coloured call-outs and hit-rate scores to guide your next step.
-“”",
+""",
         unsafe_allow_html=True,
     )
 # ─── Tabs 
 ──────────────────────────────────────────────────────────────
 ──────
 tab1, tab2, tab3 = st.tabs(
-    [“:money_with_wings: Valuation Advisor”, “:bar_chart: Backtest”, 
-“:office: Company Snapshot”]
+    ["🚀 Valuation Advisor", "🚀 Backtest", "🚀 Company Snapshot"]
 )
 # 
 ═════════════════════════════════════════════════════
@@ -110,71 +121,54 @@ tab1, tab2, tab3 = st.tabs(
 ═════════════════════════════════════════════════════
 ════════════════════════
 with tab1:
-    st.title(“:money_with_wings: Valuation Advisor”)
+    st.title("🚀 Valuation Advisor")
     if ticker_input in ticker_data.values:
         idx = ticker_data[ticker_data == ticker_input].index[0]
         company_gsubind = gsubind_data[idx]
-        try:
-            ticker_obj = yf.Ticker(ticker_input.upper())
-            info = ticker_obj.info
-            website = info.get(“website”, “”)
-            domain = urllib.parse.urlparse(website).netloc
-            logo_url = info.get(“logo_url”) or (
-                f”https://logo.clearbit.com/{domain}” if domain else None
-            )
-            current_price = info.get(“regularMarketPrice”, “Not fetched”)
-        except YFRateLimitError:
-            st.error(“:warning: Unable to fetch data from Yahoo Finance due 
-to rate limits. Please try again later.“)
-            info = {}  # Fallback to an empty dictionary
-            logo_url = None
-            current_price = “Not fetched”
-        except Exception as e:
-            st.error(f”:warning: An unexpected error occurred: {str(e)}“)
-            info = {}
-            logo_url = None
-            current_price = “Not fetched”
         # ── Logo & header 
 ────────────────────────────────────────────────
-        # ticker_obj = yf.Ticker(ticker_input.upper())
-        # info = ticker_obj.info
-        # website = info.get(“website”, “”)
-        # domain = urllib.parse.urlparse(website).netloc
-        # logo_url = info.get(“logo_url”) or (
-        #     f”https://logo.clearbit.com/{domain}” if domain else None
-        # )
+        info = get_ticker_info(ticker_input.upper())
+        if not info:
+            st.warning("⚠️ Couldn't fetch valuation data (rate limit). Please try
+again in a minute.")
+            st.stop()
+        website = info.get("website", "")
+        domain = urllib.parse.urlparse(website).netloc
+        logo_url = info.get("logo_url") or (
+            f"https://logo.clearbit.com/{domain}" if domain else None
+        )
         col1, col2 = st.columns([1, 6])
         with col1:
             if logo_url:
                 st.image(logo_url, width=50)
         with col2:
-            st.subheader(f”Details for: {ticker_input}“)
+            st.subheader(f"Details for: {ticker_input}")
         # ── Peers & industry 
 ────────────────────────────────────────────
         peer_indices = gsubind_data[gsubind_data == 
 company_gsubind].index
         peers = ticker_data.loc[peer_indices].tolist()
         industry = (
-            company_data.loc[idx, “Industry”]
-            if “Industry” in company_data.columns
-            else “N/A”
+            company_data.loc[idx, "Industry"]
+            if "Industry" in company_data.columns
+            else "N/A"
         )
-        st.markdown(f”**Industry:** {industry}“)
-        st.markdown(f”**Competitors:** {‘, ‘.join(peers)}“)
+        st.markdown(f"**Industry:** {industry}")
+        st.markdown(f"**Competitors:** {', '.join(peers)}")
         # ── Median P/E for peers (2024) 
 ────────────────────────────────
         pe_ratio = price_data.divide(eps_data)
         pe_ratio = pe_ratio.mask((pe_ratio <= 0) | pe_ratio.isna())
-        pe_ratio[“gsubind”] = gsubind_data.values
+        pe_ratio["gsubind"] = gsubind_data.values
         peer_pe_ratios = pe_ratio.loc[peer_indices]
         valid_peer_pe = peer_pe_ratios[2024].dropna()
         eps_2024 = eps_data.loc[idx, 2024]
         current_price = price_data.loc[idx, 2024]
         try:
-            current_price = info.get(“regularMarketPrice”)
+            current_price = info.get("regularMarketPrice")
             if current_price is None:
-                hist = ticker_obj.history(period=“1d”)
-                current_price = hist[“Close”][-1] if not hist.empty else np.nan
+                hist = ticker_obj.history(period="1d")
+                current_price = hist["Close"][-1] if not hist.empty else np.nan
         except Exception:
             current_price = np.nan
         eps_valid = (eps_2024 > 0) and not np.isnan(eps_2024)
@@ -188,43 +182,39 @@ company_gsubind].index
 implied_price_max = np.nan
         # ── Key inputs 
 ─────────────────────────────────────────────────
-        st.subheader(“:bar_chart: Key Valuation Inputs”)
+        st.subheader("🚀 Key Valuation Inputs")
         c1, c2, c3 = st.columns(3)
-        c1.metric(“Last Reported EPS”, f”{eps_2024:.2f}” if eps_valid else 
-“N/A”)
+        c1.metric("Last Reported EPS", f"{eps_2024:.2f}" if eps_valid else 
+"N/A")
         c2.metric(
-            “Industry Median P/E”,
-            f”{industry_pe_avg:.2f}” if not np.isnan(industry_pe_avg) else 
-“N/A”,
+            "Industry Median P/E",
+            f"{industry_pe_avg:.2f}" if not np.isnan(industry_pe_avg) else 
+"N/A",
         )
         c3.metric(
-            “Current Price”,
-            f”${current_price:.2f}” if not np.isnan(current_price) else “N/A”,
+            "Current Price",
+            f"${current_price:.2f}" if not np.isnan(current_price) else "N/A",
         )
         # ── Recommendation 
 ────────────────────────────────────────────
-        st.subheader(“:white_check_mark: Recommendation”)
+        st.subheader("✅ Recommendation")
         if not np.isnan(implied_price_avg) and implied_price_avg > 
 current_price:
-            st.success(“:chart_with_upwards_trend: Likely Undervalued — 
-Consider Buying”)
+            st.success("🚀 Likely Undervalued — Consider Buying")
         elif not np.isnan(implied_price_avg):
-            st.warning(“:chart_with_downwards_trend: Likely Overvalued — 
-Exercise Caution”)
+            st.warning("🚀 Likely Overvalued — Exercise Caution")
         else:
-            st.info(“:information_source: Not enough data to provide 
-recommendation.“)
+            st.info("ℹ️ Not enough data to provide recommendation.")
         # ── Valuation range viz 
 ───────────────────────────────────────
-        st.subheader(“:chart_with_downwards_trend: Valuation Range 
-Visualization”)
+        st.subheader("🚀 Valuation Range Visualization")
         if eps_valid and not valid_peer_pe.empty:
             fig, ax = plt.subplots(figsize=(10, 2.5))
             ax.hlines(
                 1,
                 implied_price_min,
                 implied_price_max,
-                color=“gray”,
+                color="gray",
                 linewidth=10,
                 alpha=0.4,
             )
@@ -232,66 +222,66 @@ Visualization”)
                 implied_price_avg,
                 0.9,
                 1.1,
-                color=“blue”,
+                color="blue",
                 linewidth=2,
-                label=“Avg Implied Price”,
+                label="Avg Implied Price",
             )
             ax.plot(
                 current_price,
                 1,
-                “ro”,
+                "ro",
                 markersize=10,
-                label=“Current Price”,
+                label="Current Price",
             )
             ax.text(
                 implied_price_min,
                 1.15,
-                f”Low:  ${implied_price_min:.2f}“,
-                ha=“center”,
+                f"Low:  ${implied_price_min:.2f}",
+                ha="center",
                 fontsize=9,
             )
             ax.text(
                 implied_price_avg,
                 1.27,
-                f”Avg:  ${implied_price_avg:.2f}“,
-                ha=“center”,
+                f"Avg:  ${implied_price_avg:.2f}",
+                ha="center",
                 fontsize=9,
-                color=“blue”,
+                color="blue",
             )
             ax.text(
                 implied_price_max,
                 1.15,
-                f”High: ${implied_price_max:.2f}“,
-                ha=“center”,
+                f"High: ${implied_price_max:.2f}",
+                ha="center",
                 fontsize=9,
             )
             ax.set_xlim(implied_price_min * 0.85, implied_price_max * 1.15)
             ax.set_ylim(0.8, 1.4)
-            ax.axis(“off”)
-            ax.legend(loc=“upper center”, bbox_to_anchor=(0.5, 1.35), 
+            ax.axis("off")
+            ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.35), 
 ncol=2)
             st.pyplot(fig)
             gap = ((implied_price_avg - current_price) / implied_price_avg) * 
 100
             if gap > 0:
                 st.caption(
-                    f”:chart_with_downwards_trend: Current price is **{gap:.1f}
-% below** the implied valuation average.”
+                    f"🚀 Current price is **{gap:.1f}% below** the implied 
+valuation average."
                 )
             else:
                 st.caption(
-                    f”:chart_with_upwards_trend: Current price is 
-**{abs(gap):.1f}% above** the implied valuation average.”
+                    f"🚀 Current price is **{abs(gap):.1f}% above** the implied 
+valuation average."
                 )
         else:
-            st.warning(“:warning: Not enough valid peer data to create a 
-proper visualization.“)
+            st.warning("⚠️ Not enough valid peer data to create a proper 
+visualization.")
     else:
-        st.error(“:x: Ticker not found. Please check your selection.“)
+        st.error("❌ Ticker not found. Please check your selection.")
     # Optional: reveal the code
-    with st.expander(“:desktop_computer:  Show backend code”):
-        with open(__file__, “r”) as f:
-            st.code(f.read(), language=“python”)
+    with st.expander("   Show backend code"):
+        with open(__file__, "r") as f:
+            st.code(f.read(), language="python")
 # 
 ═════════════════════════════════════════════════════
 ════════════════════════
@@ -300,81 +290,33 @@ proper visualization.“)
 ═════════════════════════════════════════════════════
 ════════════════════════
 with tab2:
-    st.title(“:bar_chart: Company Stock Valuation Analysis”)
+    st.title("🚀 Company Stock Valuation Analysis")
     if ticker_input in ticker_data.values:
         idx = ticker_data[ticker_data == ticker_input].index[0]
         gsubind = gsubind_data[idx]
-        industry = company_data.loc[idx, “Industry”]
+        industry = company_data.loc[idx, "Industry"]
         # ── Logo & header 
 ────────────────────────────────────────────
-        try:
-            ticker_obj = yf.Ticker(ticker_input.upper())
-            info = ticker_obj.info
-            website = info.get(“website”, “”)
-            domain = urllib.parse.urlparse(website).netloc
-            logo_url = info.get(“logo_url”) or (
-                f”https://logo.clearbit.com/{domain}” if domain else None
-            )
-        except YFRateLimitError:
-            st.error(“:warning: Unable to fetch data from Yahoo Finance due 
-to rate limits. Please try again later.“)
-            info = {}
-            logo_url = None
-        except Exception as e:
-            st.error(f”:warning: An unexpected error occurred: {str(e)}“)
-            info = {}
-            logo_url = None
-        # ticker_obj = yf.Ticker(ticker_input.upper())
-        # info = ticker_obj.info
-        # website = info.get(“website”, “”)
-        # domain = urllib.parse.urlparse(website).netloc
-        # logo_url = info.get(“logo_url”) or (
-        #     f”https://logo.clearbit.com/{domain}” if domain else None
-        # )
+        info = get_ticker_info(ticker_input.upper())
+        if not info:
+            st.warning("⚠️ Couldn't fetch backtest data (rate limit). Please try 
+again in a minute.")
+            st.stop()
+        website = info.get("website", "")
+        domain = urllib.parse.urlparse(website).netloc
+        logo_url = info.get("logo_url") or (
+            f"https://logo.clearbit.com/{domain}" if domain else None
+        )
         col1, col2 = st.columns([1, 6])
         with col1:
             if logo_url:
                 st.image(logo_url, width=50)
         with col2:
-            st.subheader(f”Details for: {ticker_input}“)
-        try:
-    # Get relevant price data
-            eps_2024 = eps_data.loc[idx, 2024] if 2024 in eps_data.columns 
-else None
-            # Fetch the last value from the Median P/E Array safely
-            median_pe_array = gsubind_to_median_pe.get(gsubind_data[idx], 
-[])
-            median_pe_2024 = None
-            if median_pe_array is not None and len(median_pe_array) > 0:
-                median_pe_array = np.array(median_pe_array, dtype=float)
-                if not np.all(np.isnan(median_pe_array)):
-                    median_pe_2024 = median_pe_array[-1]
- 
-    # Calculate model price
-            model_price_2024 = None
-            if eps_2024 is not None and median_pe_2024 is not None:
-                model_price_2024 = float(eps_2024) * float(median_pe_2024)
-    # Fetch actual price and current price
-            actual_price_2024 = actual_price_data.loc[ticker_input, 2024] if 
-2024 in actual_price_data.columns else None
-            current_price = info.get(“regularMarketPrice”, “Not fetched”)
-            # Display metrics
-            st.subheader(“:bar_chart: Key Valuation Inputs”)
-            c1, c2, c3 = st.columns(3)
-            c1.metric(“Model Price 2024", f”${model_price_2024:.2f}” if 
-model_price_2024 else “N/A”)
-            c2.metric(“Actual Price 2024", f”${actual_price_2024:.2f}” if 
-actual_price_2024 else “N/A”)
-            c3.metric(“Current Price”, f”${current_price:.2f}” if 
-isinstance(current_price, (int, float)) else “N/A”)
-        except Exception as e:
-            st.error(“:warning: Could not calculate key valuation inputs.“)
-            st.exception(e)
- 
-        st.write(f”**Industry:** {industry}“)
+            st.subheader(f"Details for: {ticker_input}")
+        st.write(f"**Industry:** {industry}")
         all_peers = ticker_data[gsubind_data == gsubind].tolist()
         competitors = [t for t in all_peers if t != ticker_input]
-        st.write(“**Competitors:**“, “, “.join(competitors) or “None”)
+        st.write("**Competitors:**", ", ".join(competitors) or "None")
         eps_row = eps_data.loc[idx].mask(eps_data.loc[idx] <= 0)
         median_pe_row = pd.Series(
             gsubind_to_median_pe.get(gsubind, [None] * len(years)), 
@@ -384,25 +326,24 @@ index=years
         actual_price = actual_price_data.loc[ticker_input]
         price_df = pd.DataFrame(
             {
-                “Year”: years,
-                “EPS”: eps_row.values,
-                “Median PE”: median_pe_row.values,
-                “Model Price”: model_price.values,
-                “Actual Price”: actual_price.values,
+                "Year": years,
+                "EPS": eps_row.values,
+                "Median PE": median_pe_row.values,
+                "Model Price": model_price.values,
+                "Actual Price": actual_price.values,
             }
         )
-        price_df[“Prediction”] = np.where(model_price > actual_price, 
-“Up”, “Down”)
+        price_df["Prediction"] = np.where(model_price > actual_price, "Up",
+"Down")
         # ── Interactive price comparison ────────────────────────────
-        st.subheader(f”:chart_with_upwards_trend: {ticker_input}: Model vs
-Actual Price (t → t + 1)“)
+        st.subheader(f"🚀 {ticker_input}: Model vs Actual Price (t → t + 1)")
  
         # x-axis for each series
-        x_actual = price_df[“Year”]                      # t
-        y_actual = price_df[“Actual Price”]
+        x_actual = price_df["Year"]                      # t
+        y_actual = price_df["Actual Price"]
  
         x_model  = x_actual + 1                          # t + 1
-        y_model  = price_df[“Model Price”]
+        y_model  = price_df["Model Price"]
  
         import plotly.graph_objects as go
         fig_bt = go.Figure()
@@ -412,9 +353,9 @@ Actual Price (t → t + 1)“)
             go.Scatter(
                 x=x_model,
                 y=y_model,
-                mode=“lines+markers”,
-                name=“Model (predicted t → t+1)“,
-                marker=dict(symbol=“square”),
+                mode="lines+markers",
+                name="Model (predicted t → t+1)",
+                marker=dict(symbol="square"),
                 line=dict(width=2),
             )
         )
@@ -424,25 +365,25 @@ Actual Price (t → t + 1)“)
             go.Scatter(
                 x=x_actual,
                 y=y_actual,
-                mode=“lines+markers”,
-                name=“Actual Price (t)“,
-                marker=dict(symbol=“circle”),
-                line=dict(width=2, dash=“dash”),
+                mode="lines+markers",
+                name="Actual Price (t)",
+                marker=dict(symbol="circle"),
+                line=dict(width=2, dash="dash"),
             )
         )
  
         # Layout tweaks
         fig_bt.update_layout(
             height=450,
-            xaxis_title=“Fiscal Year”,
-            yaxis_title=“Share Price ($)“,
-            hovermode=“x unified”,
+            xaxis_title="Fiscal Year",
+            yaxis_title="Share Price ($)",
+            hovermode="x unified",
             xaxis=dict(dtick=1),                 # one tick per year
             legend=dict(
-                orientation=“h”,
-                yanchor=“bottom”,
+                orientation="h",
+                yanchor="bottom",
                 y=1.02,
-                xanchor=“right”,
+                xanchor="right",
                 x=1,
             ),
             margin=dict(l=40, r=40, t=40, b=40),
@@ -454,19 +395,19 @@ Actual Price (t → t + 1)“)
         for year in range(2010, 2024):
             if pd.isna(model_price.get(year)):
                 continue
-            model_pred = “Up” if model_price[year] > actual_price[year] else
-“Down”
+            model_pred = "Up" if model_price[year] > actual_price[year] else 
+"Down"
             if (year + 1 in actual_price.index) and 
 pd.notna(actual_price.get(year + 1)):
-                m1 = “Up” if actual_price[year + 1] > actual_price[year] else 
-“Down”
+                m1 = "Up" if actual_price[year + 1] > actual_price[year] else 
+"Down"
                 if model_pred == m1:
                     correct_predictions += 1
                 total_predictions += 1
             if (year + 2 in actual_price.index) and 
 pd.notna(actual_price.get(year + 2)):
-                m2 = “Up” if actual_price[year + 2] > actual_price[year] else 
-“Down”
+                m2 = "Up" if actual_price[year + 2] > actual_price[year] else 
+"Down"
                 if model_pred == m2:
                     correct_predictions += 1
                 total_predictions += 1
@@ -474,28 +415,27 @@ pd.notna(actual_price.get(year + 2)):
             correct_predictions / total_predictions * 100 if total_predictions 
 else np.nan
         )
-        st.subheader(“:dart: Overall Prediction Hit Rate Analysis”)
-        st.markdown(f”**Total Valid Predictions:** {total_predictions}“)
-        st.markdown(f”**Correct Predictions:** {correct_predictions}“)
+        st.subheader("🚀 Overall Prediction Hit Rate Analysis")
+        st.markdown(f"**Total Valid Predictions:** {total_predictions}")
+        st.markdown(f"**Correct Predictions:** {correct_predictions}")
         if not np.isnan(overall_hit_rate):
-            st.success(f”:white_check_mark: Overall Average Hit Rate: 
-**{overall_hit_rate:.2f}%**“)
+            st.success(f"✅ Overall Average Hit Rate: **{overall_hit_rate:.2f}
+%**")
         else:
-            st.warning(“Not enough data to calculate hit rate.“)
+            st.warning("Not enough data to calculate hit rate.")
         st.dataframe(price_df, use_container_width=True)
         # ── Final prediction for 2024 + context ──────────────────────
-        price_df.set_index(“Year”, inplace=True)
+        price_df.set_index("Year", inplace=True)
         if 2024 in price_df.index and not pd.isna(price_df.loc[2024, 
-“Prediction”]):
-            pred_2024 = price_df.loc[2024, “Prediction”]
-            st.success(f”:crystal_ball: Final Prediction for 2024: 
-**{pred_2024}**“)
-            # :one: Gap %
-            model_24 = price_df.loc[2024, “Model Price”]
-            actual_24 = price_df.loc[2024, “Actual Price”]
+"Prediction"]):
+            pred_2024 = price_df.loc[2024, "Prediction"]
+            st.success(f"🚀 Final Prediction for 2024: **{pred_2024}**")
+            # 1  Gap %
+            model_24 = price_df.loc[2024, "Model Price"]
+            actual_24 = price_df.loc[2024, "Actual Price"]
             gap_pct = (model_24 - actual_24) / actual_24 * 100
-            st.markdown(f”• **Model vs Actual Gap:** {gap_pct:.1f}%“)
-            # :two: Typical sub-industry error
+            st.markdown(f"• **Model vs Actual Gap:** {gap_pct:.1f}%")
+            # 2  Typical sub-industry error
             errors = []
             for peer_idx in peer_indices:
                 peer_actual = actual_price_data.loc[ticker_data[peer_idx]]
@@ -517,21 +457,21 @@ else np.nan
                         errors.append(err)
             if errors:
                 conf_band = np.nanmedian(errors)
-                st.markdown(f”• **Typical {industry} model error:** ±
-{conf_band:.1f}%“)
+                st.markdown(f"• **Typical {industry} model error:** ±
+{conf_band:.1f}%")
             else:
                 st.markdown(
-                    “• _(Not enough data to compute sub-industry confidence 
-band)_”
+                    "• _(Not enough data to compute sub-industry confidence 
+band)_"
                 )
             st.caption(
-                “:mag: *Note: This is a point-in-time signal based solely on 
-trailing EPS × median PE. ”
-                “Consider forward-looking estimates, volatility, and macro 
-factors before making any trade.*”
+                "🚀 *Note: This is a point-in-time signal based solely on trailing 
+EPS × median PE. "
+                "Consider forward-looking estimates, volatility, and macro 
+factors before making any trade.*"
             )
         else:
-            st.warning(“Prediction for 2024 not available.“)
+            st.warning("Prediction for 2024 not available.")
         # ── Industry average hit rate 
 ─────────────────────────────────
         peer_indices = gsubind_data[gsubind_data == gsubind].index
@@ -551,14 +491,14 @@ index=years
             for year in range(2010, 2024):
                 if pd.isna(peer_model.get(year)):
                     continue
-                peer_pred = “Up” if peer_model[year] > peer_actual[year] else 
-“Down”
+                peer_pred = "Up" if peer_model[year] > peer_actual[year] else 
+"Down"
                 if (
                     year + 1 in peer_actual.index
                     and pd.notna(peer_actual.get(year + 1))
                 ):
-                    n1 = “Up” if peer_actual[year + 1] > peer_actual[year] else 
-“Down”
+                    n1 = "Up" if peer_actual[year + 1] > peer_actual[year] else 
+"Down"
                     if peer_pred == n1:
                         gsubind_correct += 1
                     gsubind_total += 1
@@ -566,30 +506,30 @@ index=years
                     year + 2 in peer_actual.index
                     and pd.notna(peer_actual.get(year + 2))
                 ):
-                    n2 = “Up” if peer_actual[year + 2] > peer_actual[year] else 
-“Down”
+                    n2 = "Up" if peer_actual[year + 2] > peer_actual[year] else 
+"Down"
                     if peer_pred == n2:
                         gsubind_correct += 1
                     gsubind_total += 1
         gsubind_hit_rate = (
             gsubind_correct / gsubind_total * 100 if gsubind_total else np.nan
         )
-        st.subheader(f”:trophy: {industry} Industry Hit Rate Comparison”)
-        st.markdown(f”**Your Stock Hit Rate:** {overall_hit_rate:.2f}%“)
+        st.subheader(f"🚀 {industry} Industry Hit Rate Comparison")
+        st.markdown(f"**Your Stock Hit Rate:** {overall_hit_rate:.2f}%")
         if not np.isnan(gsubind_hit_rate):
-            st.success(f”:trophy: Industry Average Hit Rate: 
-**{gsubind_hit_rate:.2f}%**“)
+            st.success(f"🚀 Industry Average Hit Rate: **{gsubind_hit_rate:.2f}
+%**")
         else:
-            st.warning(“Not enough data for gsubind hit rate.“)
+            st.warning("Not enough data for gsubind hit rate.")
         st.markdown(
-            f”“”
+            f"""
 **What this means:**
-This number (:bar_chart: **{gsubind_hit_rate:.2f}%**) is the **average** 
-one-year (and two-year) directional hit rate of our simple EPS×PE
+This number (🚀 **{gsubind_hit_rate:.2f}%**) is the **average** one-year 
+(and two-year) directional hit rate of our simple EPS×PE
 model across *all* members of the **{industry}** industry.
 A higher value here means the model tends to work well for this industry;
 a lower value suggests it’s closer to a coin-flip.
-“”"
+"""
         )
         # ── Global model accuracy 
 ─────────────────────────────────────
@@ -610,16 +550,16 @@ index=years
             for year in range(2010, 2024):
                 if pd.isna(peer_model.get(year)):
                     continue
-                peer_pred = “Up” if peer_model[year] > peer_actual[year] else 
-“Down”
+                peer_pred = "Up" if peer_model[year] > peer_actual[year] else 
+"Down"
                 if (
                     year + 1 in peer_actual.index
                     and pd.notna(peer_actual.get(year + 1))
                 ):
                     nn1 = (
-                        “Up”
+                        "Up"
                         if peer_actual[year + 1] > peer_actual[year]
-                        else “Down”
+                        else "Down"
                     )
                     if peer_pred == nn1:
                         global_correct += 1
@@ -629,9 +569,9 @@ index=years
                     and pd.notna(peer_actual.get(year + 2))
                 ):
                     nn2 = (
-                        “Up”
+                        "Up"
                         if peer_actual[year + 2] > peer_actual[year]
-                        else “Down”
+                        else "Down"
                     )
                     if peer_pred == nn2:
                         global_correct += 1
@@ -640,26 +580,25 @@ index=years
             global_correct / global_total * 100 if global_total else np.nan
         )
         st.subheader(
-            “:earth_africa: Overall Model Accuracy (All Stocks considered in 
-the Prototype Universe)”
+            "🚀 Overall Model Accuracy (All Stocks considered in the Prototype
+Universe)"
         )
         if not np.isnan(global_hit_rate):
-            st.success(f”:star2: Global Model Accuracy: 
-**{global_hit_rate:.2f}%**“)
+            st.success(f"🚀 Global Model Accuracy: **{global_hit_rate:.2f}
+%**")
         else:
-            st.warning(“Not enough data to calculate global model 
-accuracy.“)
+            st.warning("Not enough data to calculate global model accuracy.")
         st.markdown(
-            f”“”
+            f"""
 **Why this matters:**
 The **Global Model Accuracy** of **{global_hit_rate:.2f}%** measures 
 how often our simple EPS × PE
 price-direction model would have correctly predicted next-year (and two-
 year) moves if applied to **every single stock** in our prototype universe.
-“”"
+"""
         )
     else:
-        st.error(“:x: Ticker not found. Please check your selection.“)
+        st.error("❌ Ticker not found. Please check your selection.")
 # 
 ═════════════════════════════════════════════════════
 ════════════════════════
@@ -668,110 +607,86 @@ year) moves if applied to **every single stock** in our prototype universe.
 ═════════════════════════════════════════════════════
 ════════════════════════
 with tab3:
-    st.title(“:office: Company Snapshot”)
+    st.title("🚀 Company Snapshot")
     if ticker_input in ticker_data.values:
+        ticker = yf.Ticker(ticker_input.upper())
+        info   = get_ticker_info(ticker_input.upper())
+        if not info:
+            st.warning("⚠️ Couldn't fetch company data (rate limit). Try again 
+in a minute.")
+            st.stop()
         try:
-            ticker = yf.Ticker(ticker_input.upper())
-            info = ticker.info
-            company_name = info.get(“longName”, ticker_input.upper())
-            website = info.get(“website”, “”)
-            domain = urllib.parse.urlparse(website).netloc
-            logo_url = info.get(“logo_url”) or (
-                f”https://logo.clearbit.com/{domain}” if domain else None
+            company_name = info.get("longName", ticker_input.upper())
+            website      = info.get("website", "")
+            domain       = urllib.parse.urlparse(website).netloc
+            logo_url     = info.get("logo_url") or (
+                f"https://logo.clearbit.com/{domain}" if domain else None
             )
-        except YFRateLimitError:
-            st.error(“:warning: Unable to fetch company data due to rate 
-limits. Please try again later.“)
-            info = {}
-            logo_url = None
-            company_name = ticker_input.upper()
-            website = “Not fetched”
-        except Exception as e:
-            st.error(f”:warning: An unexpected error occurred: {str(e)}“)
-            info = {}
-            logo_url = None
-            company_name = ticker_input.upper()
-            website = “Not fetched”
-        # Display company logo and name
-        col1, col2 = st.columns([1, 10])
-        with col1:
-            if logo_url:
-                st.image(logo_url, width=50)
-        with col2:
-            st.subheader(f”{company_name} ({ticker_input.upper()})“)
-        # Display website and earnings date
-        st.markdown(f”**Website:** {website or ‘Not fetched’}“)
-        st.markdown(f”:date: **Next Earnings Date:** 
-{info.get(‘earningsDate’, [‘N/A’])[0]}“)
-        # Handle stock price chart
-        try:
+            col1, col2 = st.columns([1, 10])
+            with col1:
+                if logo_url:
+                    st.image(logo_url, width=50)
+            with col2:
+                st.subheader(f"{company_name} ({ticker_input.upper()})")
+            # ── Price chart range selector ───────────────────────────
             interval_map = {
-                “1 Day”: “1d”,
-                “5 Days”: “5d”,
-                “1 Month”: “1mo”,
-                “6 Months”: “6mo”,
-                “YTD”: “ytd”,
-                “1 Year”: “1y”,
-                “5 Years”: “5y”,
-                “Max”: “max”,
+                "1 Day": "1d",
+                "5 Days": "5d",
+                "1 Month": "1mo",
+                "6 Months": "6mo",
+                "YTD": "ytd",
+                "1 Year": "1y",
+                "5 Years": "5y",
+                "Max": "max",
             }
             interval_label = st.selectbox(
-                “:chart_with_upwards_trend: Select Time Range”, 
-list(interval_map.keys()), index=0
+                "🚀 Select Time Range", list(interval_map.keys()), index=0
             )
             selected_interval = interval_map[interval_label]
-            # Fetch historical price data
             hist = (
-                ticker.history(period=“1d”, interval=“5m”)
-                if selected_interval == “1d”
+                ticker.history(period="1d", interval="5m")
+                if selected_interval == "1d"
                 else ticker.history(period=selected_interval)
             )
-            # Plot stock price chart
             fig_snap = go.Figure()
             fig_snap.add_trace(
                 go.Scatter(
-                    x=hist.index,
-                    y=hist[“Close”],
-                    mode=“lines”,
-                    name=“Close Price”
+                    x=hist.index, y=hist["Close"], mode="lines", name="Close 
+Price"
                 )
             )
             fig_snap.update_layout(
-                title=f”{ticker_input.upper()} Stock Price - {interval_label}“,
+                title=f"{ticker_input.upper()} Stock Price - {interval_label}",
                 height=350,
-                xaxis_title=“Date”,
-                yaxis_title=“Price ($)“,
+                xaxis_title="Date",
+                yaxis_title="Price ($)",
             )
             st.plotly_chart(fig_snap, use_container_width=True)
-        except YFRateLimitError:
-            st.error(“:warning: Too many requests to Yahoo Finance. Please 
-try again later.“)
-        except Exception as e:
-            st.error(“:warning: Could not load stock price data.“)
-            st.exception(e)
-        # Display key metrics
-        try:
-            st.markdown(“### :receipt: Key Metrics”)
+            # ── Key metrics grid ────────────────────────────────────
+            st.markdown("### 🚀 Key Metrics")
             def safe_fmt(val, pct=False):
-                if val is None or val == “N/A”:
-                    return “N/A”
+                if val is None or val == "N/A":
+                    return "N/A"
                 return (
-                    f”{val*100:.2f}%” if pct else f”${val:.2f}” if isinstance(val, 
-(int, float)) else val
+                    f"{val*100:.2f}%"
+                    if pct
+                    else f"${val:.2f}"
+                    if isinstance(val, (int, float))
+                    else val
                 )
             grid_data = [
-                (“Open”, safe_fmt(info.get(“open”))),
-                (“High”, safe_fmt(info.get(“dayHigh”))),
-                (“Low”, safe_fmt(info.get(“dayLow”))),
-                (“Current”, safe_fmt(info.get(“regularMarketPrice”))),
-                (“Mkt Cap”, f”${info.get(‘marketCap’, 0)/1e9:.2f}B”),
-                (“P/E Ratio”, info.get(“trailingPE”, “N/A”)),
-                (“Div Yield”, safe_fmt(info.get(“dividendYield”), pct=True)),
-                (“52-wk High”, safe_fmt(info.get(“fiftyTwoWeekHigh”))),
-                (“52-wk Low”, safe_fmt(info.get(“fiftyTwoWeekLow”))),
+                ("Open", safe_fmt(info.get("open"))),
+                ("High", safe_fmt(info.get("dayHigh"))),
+                ("Low", safe_fmt(info.get("dayLow"))),
+                ("Current", safe_fmt(info.get("regularMarketPrice"))),
+                ("Mkt Cap", f"${info.get('marketCap', 0)/1e9:.2f}B"),
+                ("P/E Ratio", info.get("trailingPE", "N/A")),
+                ("Div Yield", safe_fmt(info.get("dividendYield"), pct=True)),
+                ("52-wk High", safe_fmt(info.get("fiftyTwoWeekHigh"))),
+                ("52-wk Low", safe_fmt(info.get("fiftyTwoWeekLow"))),
             ]
             st.markdown(
-                “”"
+                """
 <style>
 .metric-table {display:grid;grid-template-
 columns:repeat(4,1fr);gap:10px;border:1px solid #eee;border-
@@ -781,30 +696,30 @@ radius:6px;padding:10px;text-align:center;font-
 size:14px;background:#fafafa;}
 .metric-item b {font-size:16px;}
 </style>
-“”",
+""",
                 unsafe_allow_html=True,
             )
             html = (
-                “<div class=‘metric-table’>”
-                + “”.join(
+                "<div class='metric-table'>"
+                + "".join(
                     [
-                        f”<div class=‘metric-item’><b>{k}</b><br>{v}</div>”
+                        f"<div class='metric-item'><b>{k}</b><br>{v}</div>"
                         for k, v in grid_data
                     ]
                 )
-                + “</div>”
+                + "</div>"
             )
             st.markdown(html, unsafe_allow_html=True)
+            # ── Company overview 
+────────────────────────────────────
+            st.markdown("### 🚀 Company Overview")
+            st.info(info.get("longBusinessSummary", "No description 
+available."))
+            st.markdown(f"🚀 **Next Earnings Date**: 
+{info.get('earningsDate', ['N/A'])[0]}")
+            st.caption("🚀 Data powered by Yahoo Finance")
         except Exception as e:
-            st.error(“:warning: Could not load key metrics.“)
-            st.exception(e)
-        # Display company overview
-        try:
-            st.markdown(“### :office: Company Overview”)
-            st.info(info.get(“longBusinessSummary”, “No description 
-available.“))
-        except Exception as e:
-            st.error(“:warning: Could not load company overview.“)
+            st.error("Could not load company data.")
             st.exception(e)
     else:
-        st.error(“:x: Ticker not found. Please check your selection.“)
+        st.error("❌ Ticker not found. Please check your selection.")
